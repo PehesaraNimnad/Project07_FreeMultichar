@@ -40,24 +40,55 @@ local function makeCam()
     RenderScriptCams(true, false, 0, true, true)
 end
 
-local function modelOf(char, model)
-    if model then return tonumber(model) or joaat(model) end
-    return (char and char.gender == 1) and `mp_f_freemode_01` or `mp_m_freemode_01`
-end
+-- a freemode ped without a head blend renders with no head: characters without a saved look get one of these
+local DEFAULT_LOOKS = {
+    [0] = {
+        model = 'mp_m_freemode_01', props = {},
+        headBlend = { shapeFirst = 4, shapeSecond = 0, skinFirst = 4, skinSecond = 0, shapeMix = 0.5, skinMix = 0.5, shapeThird = 0, skinThird = 0, thirdMix = 0 },
+        hair = { style = 4, color = 0, highlight = 0, texture = 0 },
+        components = {
+            { component_id = 3, drawable = 0, texture = 0 }, { component_id = 4, drawable = 10, texture = 0 },
+            { component_id = 6, drawable = 10, texture = 0 }, { component_id = 8, drawable = 15, texture = 0 },
+            { component_id = 11, drawable = 4, texture = 0 },
+        },
+    },
+    [1] = {
+        model = 'mp_f_freemode_01', props = {},
+        headBlend = { shapeFirst = 21, shapeSecond = 0, skinFirst = 21, skinSecond = 0, shapeMix = 0.5, skinMix = 0.5, shapeThird = 0, skinThird = 0, thirdMix = 0 },
+        hair = { style = 15, color = 0, highlight = 0, texture = 0 },
+        components = {
+            { component_id = 3, drawable = 3, texture = 0 }, { component_id = 4, drawable = 0, texture = 0 },
+            { component_id = 6, drawable = 0, texture = 0 }, { component_id = 8, drawable = 2, texture = 0 },
+            { component_id = 11, drawable = 3, texture = 0 },
+        },
+    },
+}
 
---- puts the character's look on the player ped (fades around the swap)
-local function dress(char)
-    local skin, model
-    if char and char.citizenid then skin, model = lib.callback.await('p07free:skin', false, char.citizenid) end
-    model = modelOf(char, model)
+local function setModel(model)
+    model = type(model) == 'string' and (tonumber(model) or joaat(model)) or tonumber(model)
+    if not model or not IsModelInCdimage(model) then return false end
     if GetEntityModel(PlayerPedId()) ~= model then
-        lib.requestModel(model, 5000)
+        lib.requestModel(model, 10000)
         SetPlayerModel(PlayerId(), model)
         SetModelAsNoLongerNeeded(model)
+        Wait(0)
     end
-    local ped = PlayerPedId()
-    SetPedDefaultComponentVariation(ped)
-    if skin then P7H.Appearance.ApplyToPed(ped, skin) end
+    return true
+end
+
+--- puts the character's saved look (illenium-appearance) on the player ped, or a default look with a head
+local function dress(char)
+    if char and char.citizenid then
+        local skin, model = lib.callback.await('p07free:skin', false, char.citizenid)
+        if skin and setModel(model or skin.model) then
+            P7H.Appearance.ApplyToPed(PlayerPedId(), skin)
+            placePed()
+            return
+        end
+    end
+    local look = DEFAULT_LOOKS[char and char.gender == 1 and 1 or 0]
+    setModel(look.model)
+    P7H.Appearance.ApplyToPed(PlayerPedId(), look)
     placePed()
 end
 
@@ -193,11 +224,22 @@ RegisterNUICallback('exit', function(_, cb)
     if Config.exitAction == 'quit' then QuitGame() else TriggerServerEvent('p07free:exit') end
 end)
 
+-- an admin changed this account's slots while the screen is open
+RegisterNetEvent('p07free:refresh', function()
+    if not isOpen then return end
+    fetch()
+    nui('open', { characters = chars, maxSlots = maxSlots, allowDelete = Config.allowDelete })
+end)
+
 -- ── start / logout ─────────────────────────────────────────────────────
 
 RegisterNetEvent(P7H.Framework.LoggedOutEvent, function()
     if GetInvokingResource() then return end
-    CreateThread(open)
+    CreateThread(function()
+        DoScreenFadeOut(500)
+        Wait(600)
+        open()
+    end)
 end)
 
 CreateThread(function()

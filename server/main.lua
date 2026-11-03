@@ -59,6 +59,20 @@ local function fetch(src)
     return list
 end
 
+-- ── slots (extra slots per account, set by admins) ──────────────────────
+
+CreateThread(function()
+    MySQL.query.await([[CREATE TABLE IF NOT EXISTS `p07free_slots` (
+        `license` VARCHAR(80) NOT NULL, `slots` INT NOT NULL, PRIMARY KEY (`license`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]])
+end)
+
+local function slotsFor(src)
+    local l2, l1 = licenses(src)
+    local n = MySQL.scalar.await('SELECT slots FROM p07free_slots WHERE license = ? OR license = ? LIMIT 1', { l2 or '', l1 or '' })
+    return math.max(1, math.min(Config.slotLimit, tonumber(n) or Config.maxSlots))
+end
+
 local function owns(src, citizenid)
     if type(citizenid) ~= 'string' or #citizenid > 20 then return false end
     local l2, l1 = licenses(src)
@@ -68,7 +82,7 @@ end
 
 lib.callback.register('p07free:chars', function(src)
     if not throttle(src, 'chars', 400) or P7H.Framework.IsLoaded(src) then return false end
-    return fetch(src), Config.maxSlots
+    return fetch(src), slotsFor(src)
 end)
 
 lib.callback.register('p07free:skin', function(src, citizenid)
@@ -110,11 +124,11 @@ lib.callback.register('p07free:create', function(src, data)
     if not nat then return false, 'Nationality: letters only' end
     local gender = tonumber(data.gender) == 1 and 1 or 0
 
-    local list = fetch(src)
-    if #list >= Config.maxSlots then return false, 'No free slot' end
+    local list, max = fetch(src), slotsFor(src)
+    if #list >= max then return false, 'No free slot' end
     local used, slot = {}, nil
     for _, c in ipairs(list) do used[c.slot] = true end
-    for i = 1, Config.maxSlots do if not used[i] then slot = i break end end
+    for i = 1, max + #list do if not used[i] then slot = i break end end
 
     local ok = P7H.Framework.Login(src, nil, { charinfo = {
         firstname = first, lastname = lastName, nationality = nat, gender = gender,
@@ -156,3 +170,49 @@ end)
 RegisterNetEvent('p07free:exit', function()
     DropPlayer(source, 'See you soon.')
 end)
+
+-- ── commands: /logout, /addcharslot, /removecharslot ───────────────────
+
+local function reply(src, message, kind)
+    if src == 0 then return print('[Project07_FreeMultichar] ' .. message) end
+    P7H.Notify.ShowNotify(src, message, kind or 'inform')
+end
+
+local function isAdmin(src)
+    return src == 0 or P7H.Framework.IsAdmin(src) or IsPlayerAceAllowed(src, 'group.admin')
+end
+
+-- /logout = back to the character screen, /logout <id> = admins log a player out
+RegisterCommand(Config.commands.logout, function(src, args)
+    local target = tonumber(args[1])
+    if target and target ~= src then
+        if not isAdmin(src) then return reply(src, 'No permission', 'error') end
+        if not GetPlayerName(target) or not P7H.Framework.IsLoaded(target) then return reply(src, 'Player not found or not in a character', 'error') end
+        P7H.Framework.Logout(target)
+        log('Logged out by admin', ('**%s** logged out **%s**'):format(src == 0 and 'console' or GetPlayerName(src), GetPlayerName(target)), 15105570)
+        return reply(src, ('%s is back on the character screen'):format(GetPlayerName(target)), 'success')
+    end
+    if src == 0 or not P7H.Framework.IsLoaded(src) then return end
+    if not Config.playerLogout and not isAdmin(src) then return reply(src, 'No permission', 'error') end
+    P7H.Framework.Logout(src)
+end, false)
+
+local function slotCommand(delta)
+    return function(src, args)
+        if not isAdmin(src) then return reply(src, 'No permission', 'error') end
+        local target = tonumber(args[1])
+        local amount = math.max(1, math.min(Config.slotLimit, math.floor(tonumber(args[2]) or 1)))
+        if not target or not GetPlayerName(target) then return reply(src, 'Usage: /' .. (delta > 0 and Config.commands.addSlot or Config.commands.removeSlot) .. ' <id> [amount]', 'error') end
+        local l2, l1 = licenses(target)
+        local license = l2 or l1
+        if not license then return reply(src, 'Player has no license id', 'error') end
+        local slots = math.max(1, math.min(Config.slotLimit, slotsFor(target) + delta * amount))
+        MySQL.prepare.await('INSERT INTO p07free_slots (license, slots) VALUES (?, ?) ON DUPLICATE KEY UPDATE slots = VALUES(slots)', { license, slots })
+        TriggerClientEvent('p07free:refresh', target)
+        log('Character slots', ('**%s** set **%s** to %d slots'):format(src == 0 and 'console' or GetPlayerName(src), GetPlayerName(target), slots), 3447003)
+        reply(src, ('%s now has %d character slots'):format(GetPlayerName(target), slots), 'success')
+    end
+end
+
+RegisterCommand(Config.commands.addSlot, slotCommand(1), false)
+RegisterCommand(Config.commands.removeSlot, slotCommand(-1), false)

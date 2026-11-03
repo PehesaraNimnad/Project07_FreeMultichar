@@ -1,7 +1,17 @@
 Config = {}
 
-Config.maxSlots = 4
+Config.maxSlots = 4                -- slots every account starts with
+Config.slotLimit = 10              -- most slots an admin can give one account
 Config.allowDelete = true
+
+-- /logout: back to the character screen; /logout <id>: admins only
+-- /addcharslot <id> [amount], /removecharslot <id> [amount]: admins only (extra slots are saved per account)
+Config.commands = {
+    logout = 'logout',
+    addSlot = 'addcharslot',
+    removeSlot = 'removecharslot',
+}
+Config.playerLogout = true         -- false: only admins can use /logout
 Config.exitAction = 'disconnect'   -- 'disconnect' or 'quit'
 
 -- The one scene: where the character stands and how the camera frames it (character on the right, text on the left)
